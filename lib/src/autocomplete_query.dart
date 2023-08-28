@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class AutocompleteQuery {
   /// Creates a [AutocompleteQuery] with the specified [query] and
   /// [selection].
-  const AutocompleteQuery({
+  AutocompleteQuery({
     required this.query,
     required this.selection,
   });
