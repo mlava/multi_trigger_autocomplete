@@ -12,7 +12,7 @@ class AutocompleteQuery {
   final String query;
 
   /// The selection in the text field.
-  final TextSelection selection;
+  TextSelection selection;
 
   @override
   bool operator ==(Object other) =>
