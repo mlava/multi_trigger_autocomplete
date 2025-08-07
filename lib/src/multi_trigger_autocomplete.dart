@@ -1,8 +1,10 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_portal/flutter_portal.dart';
 import 'package:multi_trigger_autocomplete/multi_trigger_autocomplete.dart';
+import './autocomplete_trigger.dart';
 
 /// The type of the Autocomplete callback which returns the widget that
 /// contains the input [TextField] or [TextFormField].
@@ -11,10 +13,10 @@ import 'package:multi_trigger_autocomplete/multi_trigger_autocomplete.dart';
 ///
 ///   * [RawAutocomplete.fieldViewBuilder], which is of this type.
 typedef MultiTriggerAutocompleteFieldViewBuilder = Widget Function(
-  BuildContext context,
-  TextEditingController textEditingController,
-  FocusNode focusNode,
-);
+    BuildContext context,
+    TextEditingController textEditingController,
+    FocusNode focusNode,
+    );
 
 /// Positions the [AutocompleteTrigger] options around the [TextField] or
 /// [TextFormField] that triggered the autocomplete.
@@ -97,8 +99,8 @@ class MultiTriggerAutocomplete extends StatefulWidget {
     this.debounceDuration = const Duration(milliseconds: 300),
   })  : assert((focusNode == null) == (textEditingController == null)),
         assert(
-          !(textEditingController != null && initialValue != null),
-          'textEditingController and initialValue cannot be simultaneously defined.',
+        !(textEditingController != null && initialValue != null),
+        'textEditingController and initialValue cannot be simultaneously defined.',
         );
 
   /// The triggers that trigger autocomplete.
@@ -171,10 +173,10 @@ class MultiTriggerAutocomplete extends StatefulWidget {
   final Duration debounceDuration;
 
   static Widget _defaultFieldViewBuilder(
-    BuildContext context,
-    TextEditingController textEditingController,
-    FocusNode focusNode,
-  ) {
+      BuildContext context,
+      TextEditingController textEditingController,
+      FocusNode focusNode,
+      ) {
     return _MultiTriggerAutocompleteField(
       focusNode: focusNode,
       textEditingController: textEditingController,
@@ -184,7 +186,7 @@ class MultiTriggerAutocomplete extends StatefulWidget {
   /// Returns the nearest [StreamAutocomplete] ancestor of the given context.
   static MultiTriggerAutocompleteState of(BuildContext context) {
     final state =
-        context.findAncestorStateOfType<MultiTriggerAutocompleteState>();
+    context.findAncestorStateOfType<MultiTriggerAutocompleteState>();
     assert(state != null, 'MultiTriggerAutocomplete not found');
     return state!;
   }
@@ -197,6 +199,7 @@ class MultiTriggerAutocomplete extends StatefulWidget {
 class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
   late TextEditingController _textEditingController;
   late FocusNode _focusNode;
+  final FocusNode _optionsViewFocusNode = FocusNode();
 
   AutocompleteQuery? _currentQuery;
   AutocompleteTrigger? _currentTrigger;
@@ -204,7 +207,6 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
   bool _hideOptions = false;
   String _lastFieldText = '';
 
-  // True if the state indicates that the options should be visible.
   bool get _shouldShowOptions {
     return !_hideOptions &&
         _focusNode.hasFocus &&
@@ -213,9 +215,9 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
   }
 
   void acceptAutocompleteOption(
-    String option, {
-    bool keepTrigger = true,
-  }) {
+      String option, {
+        bool keepTrigger = true,
+      }) {
     if (option.isEmpty) return;
 
     final query = _currentQuery;
@@ -231,12 +233,11 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
     final end = querySelection.extentOffset;
 
     final alreadyContainsSpace = text.substring(end).startsWith(' ');
-    // Having extra space helps dismissing the auto-completion view.
+
     if (!alreadyContainsSpace) option += ' ';
 
     var selectionOffset = start + option.length;
-    // In case the extra space is already there, we need to move the cursor
-    // after the space.
+
     if (alreadyContainsSpace) selectionOffset += 1;
 
     final newText = text.replaceRange(start, end, option);
@@ -261,9 +262,9 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
   }
 
   void showOptions(
-    AutocompleteQuery query,
-    AutocompleteTrigger trigger,
-  ) {
+      AutocompleteQuery query,
+      AutocompleteTrigger trigger,
+      ) {
     final prevQuery = _currentQuery;
     final prevTrigger = _currentTrigger;
     if (prevQuery == query && prevTrigger == trigger) return;
@@ -273,11 +274,9 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
     if (mounted) setState(() {});
   }
 
-  // Checks if there is any invoked autocomplete trigger and returns the first
-  // one along with the query that matches the current input.
   _AutocompleteInvokedTriggerWithQuery? _getInvokedTriggerWithQuery(
-    TextEditingValue textEditingValue,
-  ) {
+      TextEditingValue textEditingValue,
+      ) {
     final autocompleteTriggers = widget.autocompleteTriggers.toSet();
     for (final trigger in autocompleteTriggers) {
       final query = trigger.invokingTrigger(textEditingValue);
@@ -290,48 +289,33 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
 
   Timer? _debounceTimer;
 
-  // Called when _textEditingController changes.
   void _onChangedField() {
     if (_debounceTimer?.isActive == true) _debounceTimer?.cancel();
     _debounceTimer = Timer(widget.debounceDuration, () {
       final textEditingValue = _textEditingController.value;
 
-      // If the content has not changed, then there is nothing to do.
       if (textEditingValue.text == _lastFieldText) return;
 
-      // Make sure the options are no longer hidden if the content of the
-      // field changes.
       _hideOptions = false;
       _lastFieldText = textEditingValue.text;
 
-      // If the text field is empty, then there is no need to do anything.
       if (textEditingValue.text.isEmpty) return closeOptions();
 
-      // If the text field is not empty, then we need to check if the
-      // text field contains a trigger.
       final triggerWithQuery = _getInvokedTriggerWithQuery(textEditingValue);
 
-      // If the text field does not contain a trigger, then there is no need
-      // to do anything.
       if (triggerWithQuery == null) return closeOptions();
 
-      // If the text field contains a trigger, then we need to open the
-      // portal.
       final trigger = triggerWithQuery.trigger;
       final query = triggerWithQuery.query;
       return showOptions(query, trigger);
     });
   }
 
-  // Called when the field's FocusNode changes.
   void _onChangedFocus() {
-    // Options should no longer be hidden when the field is re-focused.
     _hideOptions = !_focusNode.hasFocus;
     if (mounted) setState(() {});
   }
 
-  // Handle a potential change in textEditingController by properly disposing of
-  // the old one and setting up the new one, if needed.
   void _updateTextEditingController(
       TextEditingController? old, TextEditingController? current) {
     if ((old == null && current == null) || old == current) {
@@ -351,8 +335,6 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
     _textEditingController.addListener(_onChangedField);
   }
 
-  // Handle a potential change in focusNode by properly disposing of the old one
-  // and setting up the new one, if needed.
   void _updateFocusNode(FocusNode? old, FocusNode? current) {
     if ((old == null && current == null) || old == current) {
       return;
@@ -401,6 +383,7 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
     if (widget.focusNode == null) {
       _focusNode.dispose();
     }
+    _optionsViewFocusNode.dispose();
     _debounceTimer?.cancel();
     _currentTrigger = null;
     _currentQuery = null;
@@ -409,31 +392,54 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
 
   @override
   Widget build(BuildContext context) {
-    // Adding additional builder so that [MultiTriggerAutocomplete.of] works.
     return Builder(
       builder: (context) {
         final anchor = widget.optionsAlignment._toAnchor(
           widthFactor: widget.optionsWidthFactor,
         );
         final shouldShowOptions = _shouldShowOptions;
-        final optionViewBuilder = shouldShowOptions
-            ? TextFieldTapRegion(
-                child: _currentTrigger!.optionsViewBuilder(
-                  context,
-                  _currentQuery!,
-                  _textEditingController,
-                ),
-              )
-            : null;
+
+        Widget? portalFollower;
+        if (shouldShowOptions && _currentTrigger != null && _currentQuery != null) {
+          portalFollower = TextFieldTapRegion(
+            child: _currentTrigger!.optionsViewBuilder(
+              context,
+              _currentQuery!,
+              _textEditingController,
+              _optionsViewFocusNode, 
+            ),
+          );
+        }
 
         return PortalTarget(
           anchor: anchor,
           visible: shouldShowOptions,
-          portalFollower: optionViewBuilder,
-          child: widget.fieldViewBuilder(
-            context,
-            _textEditingController,
-            _focusNode,
+          portalFollower: portalFollower,
+          child: Focus(
+            focusNode: _focusNode, 
+            onKeyEvent: (FocusNode node, KeyEvent event) { 
+              if (event is KeyDownEvent) { 
+                if (event.logicalKey == LogicalKeyboardKey.escape) {
+                  if (_shouldShowOptions) {
+                    closeOptions();
+                    SemanticsService.announce("Autocomplete suggestions hidden", Directionality.of(context));
+                    return KeyEventResult.handled; 
+                  }
+                } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                  if (_shouldShowOptions && !_optionsViewFocusNode.hasFocus) {
+                    _optionsViewFocusNode.requestFocus();
+                    SemanticsService.announce("Showing autocomplete suggestions. Use arrow keys to navigate.", Directionality.of(context));
+                    return KeyEventResult.handled; 
+                  }
+                }
+              }
+              return KeyEventResult.ignored; 
+            },
+            child: widget.fieldViewBuilder(
+              context,
+              _textEditingController,
+              _focusNode,
+            ),
           ),
         );
       },
@@ -448,13 +454,11 @@ class _AutocompleteInvokedTriggerWithQuery {
   final AutocompleteQuery query;
 }
 
-// The default Material-style Autocomplete text field.
 class _MultiTriggerAutocompleteField extends StatelessWidget {
   const _MultiTriggerAutocompleteField({
-    Key? key,
     required this.focusNode,
     required this.textEditingController,
-  }) : super(key: key);
+  });
 
   final FocusNode focusNode;
 

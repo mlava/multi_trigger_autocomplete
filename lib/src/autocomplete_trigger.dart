@@ -4,10 +4,11 @@ import 'package:multi_trigger_autocomplete/src/autocomplete_query.dart';
 /// The type of the [AutocompleteTrigger] callback which returns a [Widget] that
 /// displays the specified [options].
 typedef AutocompleteTriggerOptionsViewBuilder = Widget Function(
-  BuildContext context,
-  AutocompleteQuery autocompleteQuery,
-  TextEditingController textEditingController,
-);
+    BuildContext context,
+    AutocompleteQuery autocompleteQuery,
+    TextEditingController textEditingController,
+    FocusNode optionsFocusNode
+    );
 
 class AutocompleteTrigger {
   /// Creates a [AutocompleteTrigger] which can be used to trigger
@@ -44,12 +45,12 @@ class AutocompleteTrigger {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is AutocompleteTrigger &&
-          runtimeType == other.runtimeType &&
-          trigger == other.trigger &&
-          triggerOnlyAtStart == other.triggerOnlyAtStart &&
-          triggerOnlyAfterSpace == other.triggerOnlyAfterSpace &&
-          minimumRequiredCharacters == other.minimumRequiredCharacters;
+          other is AutocompleteTrigger &&
+              runtimeType == other.runtimeType &&
+              trigger == other.trigger &&
+              triggerOnlyAtStart == other.triggerOnlyAtStart &&
+              triggerOnlyAfterSpace == other.triggerOnlyAfterSpace &&
+              minimumRequiredCharacters == other.minimumRequiredCharacters;
 
   @override
   int get hashCode =>
@@ -70,7 +71,7 @@ class AutocompleteTrigger {
 
     // Find the first [trigger] location before the input cursor.
     final firstTriggerIndexBeforeCursor =
-        text.substring(0, cursorPosition).lastIndexOf(trigger);
+    text.substring(0, cursorPosition).lastIndexOf(trigger);
 
     // If the [trigger] is not found before the cursor, then it's not a trigger.
     if (firstTriggerIndexBeforeCursor == -1) return null;
