@@ -6,12 +6,6 @@ import 'package:flutter_portal/flutter_portal.dart';
 import 'package:multi_trigger_autocomplete/multi_trigger_autocomplete.dart';
 import './autocomplete_trigger.dart';
 
-/// The type of the Autocomplete callback which returns the widget that
-/// contains the input [TextField] or [TextFormField].
-///
-/// See also:
-///
-///   * [RawAutocomplete.fieldViewBuilder], which is of this type.
 typedef MultiTriggerAutocompleteFieldViewBuilder = Widget Function(
     BuildContext context,
     TextEditingController textEditingController,
@@ -83,10 +77,7 @@ enum OptionsAlignment {
 
 /// A widget that provides a text field with autocomplete functionality.
 class MultiTriggerAutocomplete extends StatefulWidget {
-  /// Create an instance of StreamAutocomplete.
-  ///
-  /// [displayStringForOption], [optionsBuilder] and [optionsViewBuilder] must
-  /// not be null.
+
   const MultiTriggerAutocomplete({
     super.key,
     required this.autocompleteTriggers,
@@ -200,6 +191,7 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
   late TextEditingController _textEditingController;
   late FocusNode _focusNode;
   final FocusNode _optionsViewFocusNode = FocusNode();
+  late FocusNode _wrapperFocusNode;
 
   AutocompleteQuery? _currentQuery;
   AutocompleteTrigger? _currentTrigger;
@@ -361,6 +353,7 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
     _textEditingController.addListener(_onChangedField);
     _focusNode = widget.focusNode ?? FocusNode();
     _focusNode.addListener(_onChangedFocus);
+    _wrapperFocusNode = FocusNode(debugLabel: 'MultiTriggerAutocomplete Wrapper');
   }
 
   @override
@@ -384,6 +377,7 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
       _focusNode.dispose();
     }
     _optionsViewFocusNode.dispose();
+    _wrapperFocusNode.dispose();
     _debounceTimer?.cancel();
     _currentTrigger = null;
     _currentQuery = null;
@@ -416,7 +410,7 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
           visible: shouldShowOptions,
           portalFollower: portalFollower,
           child: Focus(
-            focusNode: _focusNode, 
+            focusNode: _wrapperFocusNode, 
             onKeyEvent: (FocusNode node, KeyEvent event) { 
               if (event is KeyDownEvent) { 
                 if (event.logicalKey == LogicalKeyboardKey.escape) {
