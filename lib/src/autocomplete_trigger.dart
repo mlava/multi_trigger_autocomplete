@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:multi_trigger_autocomplete/src/autocomplete_query.dart';
+import 'package:multi_trigger_autocomplete/src/multi_trigger_autocomplete.dart';
 
 /// The type of the [AutocompleteTrigger] callback which returns a [Widget] that
 /// displays the specified [options].
@@ -7,7 +8,8 @@ typedef AutocompleteTriggerOptionsViewBuilder = Widget Function(
     BuildContext context,
     AutocompleteQuery autocompleteQuery,
     TextEditingController textEditingController,
-    FocusNode optionsFocusNode
+    FocusNode optionsFocusNode,
+    MultiTriggerAutocompleteState autocompleteState,
     );
 
 class AutocompleteTrigger {
@@ -45,12 +47,12 @@ class AutocompleteTrigger {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-          other is AutocompleteTrigger &&
-              runtimeType == other.runtimeType &&
-              trigger == other.trigger &&
-              triggerOnlyAtStart == other.triggerOnlyAtStart &&
-              triggerOnlyAfterSpace == other.triggerOnlyAfterSpace &&
-              minimumRequiredCharacters == other.minimumRequiredCharacters;
+      other is AutocompleteTrigger &&
+          runtimeType == other.runtimeType &&
+          trigger == other.trigger &&
+          triggerOnlyAtStart == other.triggerOnlyAtStart &&
+          triggerOnlyAfterSpace == other.triggerOnlyAfterSpace &&
+          minimumRequiredCharacters == other.minimumRequiredCharacters;
 
   @override
   int get hashCode =>
@@ -65,26 +67,18 @@ class AutocompleteTrigger {
     final text = textEditingValue.text;
     final selection = textEditingValue.selection;
 
-    // If the selection is invalid, then it's not a trigger.
     if (!selection.isValid) return null;
     final cursorPosition = selection.baseOffset;
 
-    // Find the first [trigger] location before the input cursor.
     final firstTriggerIndexBeforeCursor =
-    text.substring(0, cursorPosition).lastIndexOf(trigger);
+        text.substring(0, cursorPosition).lastIndexOf(trigger);
 
-    // If the [trigger] is not found before the cursor, then it's not a trigger.
     if (firstTriggerIndexBeforeCursor == -1) return null;
 
-    // If the [trigger] is found before the cursor, but the [trigger] is only
-    // recognised at the start of the input, then it's not a trigger.
     if (triggerOnlyAtStart && firstTriggerIndexBeforeCursor != 0) {
       return null;
     }
 
-    // Only show typing suggestions after a space, new line or at the start of the input.
-    // valid examples: "@user", "Hello @user", "Hello\n@user"
-    // invalid examples: "Hello@user"
     final textBeforeTrigger = text.substring(0, firstTriggerIndexBeforeCursor);
     if (triggerOnlyAfterSpace &&
         textBeforeTrigger.isNotEmpty &&
@@ -93,19 +87,13 @@ class AutocompleteTrigger {
       return null;
     }
 
-    // The suggestion range. Protect against invalid ranges.
     final suggestionStart = firstTriggerIndexBeforeCursor + trigger.length;
     final suggestionEnd = cursorPosition;
     if (suggestionStart > suggestionEnd) return null;
 
-    // Fetch the suggestion text. The suggestions can't have spaces.
-    // valid example: "@luke_skywa..."
-    // invalid example: "@luke skywa..."
     final suggestionText = text.substring(suggestionStart, suggestionEnd);
     if (suggestionText.contains(' ')) return null;
 
-    // A minimum number of characters can be provided to only show
-    // suggestions after the customer has input enough characters.
     if (suggestionText.length < minimumRequiredCharacters) return null;
 
     return AutocompleteQuery(

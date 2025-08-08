@@ -1,16 +1,21 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_portal/flutter_portal.dart';
 import 'package:multi_trigger_autocomplete/multi_trigger_autocomplete.dart';
-import './autocomplete_trigger.dart';
 
+/// The type of the Autocomplete callback which returns the widget that
+/// contains the input [TextField] or [TextFormField].
+///
+/// See also:
+///
+///   * [RawAutocomplete.fieldViewBuilder], which is of this type.
 typedef MultiTriggerAutocompleteFieldViewBuilder = Widget Function(
-    BuildContext context,
-    TextEditingController textEditingController,
-    FocusNode focusNode,
-    );
+  BuildContext context,
+  TextEditingController textEditingController,
+  FocusNode focusNode,
+);
 
 /// Positions the [AutocompleteTrigger] options around the [TextField] or
 /// [TextFormField] that triggered the autocomplete.
@@ -77,7 +82,10 @@ enum OptionsAlignment {
 
 /// A widget that provides a text field with autocomplete functionality.
 class MultiTriggerAutocomplete extends StatefulWidget {
-
+  /// Create an instance of StreamAutocomplete.
+  ///
+  /// [displayStringForOption], [optionsBuilder] and [optionsViewBuilder] must
+  /// not be null.
   const MultiTriggerAutocomplete({
     super.key,
     required this.autocompleteTriggers,
@@ -90,8 +98,8 @@ class MultiTriggerAutocomplete extends StatefulWidget {
     this.debounceDuration = const Duration(milliseconds: 300),
   })  : assert((focusNode == null) == (textEditingController == null)),
         assert(
-        !(textEditingController != null && initialValue != null),
-        'textEditingController and initialValue cannot be simultaneously defined.',
+          !(textEditingController != null && initialValue != null),
+          'textEditingController and initialValue cannot be simultaneously defined.',
         );
 
   /// The triggers that trigger autocomplete.
@@ -164,10 +172,10 @@ class MultiTriggerAutocomplete extends StatefulWidget {
   final Duration debounceDuration;
 
   static Widget _defaultFieldViewBuilder(
-      BuildContext context,
-      TextEditingController textEditingController,
-      FocusNode focusNode,
-      ) {
+    BuildContext context,
+    TextEditingController textEditingController,
+    FocusNode focusNode,
+  ) {
     return _MultiTriggerAutocompleteField(
       focusNode: focusNode,
       textEditingController: textEditingController,
@@ -177,7 +185,7 @@ class MultiTriggerAutocomplete extends StatefulWidget {
   /// Returns the nearest [StreamAutocomplete] ancestor of the given context.
   static MultiTriggerAutocompleteState of(BuildContext context) {
     final state =
-    context.findAncestorStateOfType<MultiTriggerAutocompleteState>();
+        context.findAncestorStateOfType<MultiTriggerAutocompleteState>();
     assert(state != null, 'MultiTriggerAutocomplete not found');
     return state!;
   }
@@ -190,8 +198,10 @@ class MultiTriggerAutocomplete extends StatefulWidget {
 class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
   late TextEditingController _textEditingController;
   late FocusNode _focusNode;
-  final FocusNode _optionsViewFocusNode = FocusNode();
-  late FocusNode _wrapperFocusNode;
+  late final FocusNode _wrapperFocusNode;
+  late final FocusNode _optionsViewFocusNode;
+  late VoidCallback _fieldNodeFocusListener;
+  FocusOnKeyEventCallback? _originalExternalFocusNodeOnKeyEvent;
 
   AutocompleteQuery? _currentQuery;
   AutocompleteTrigger? _currentTrigger;
@@ -201,7 +211,7 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
 
   bool get _shouldShowOptions {
     return !_hideOptions &&
-        _focusNode.hasFocus &&
+        (_focusNode.hasFocus || _optionsViewFocusNode.hasFocus) &&
         _currentQuery != null &&
         _currentTrigger != null;
   }
@@ -225,11 +235,9 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
     final end = querySelection.extentOffset;
 
     final alreadyContainsSpace = text.substring(end).startsWith(' ');
-
     if (!alreadyContainsSpace) option += ' ';
 
     var selectionOffset = start + option.length;
-
     if (alreadyContainsSpace) selectionOffset += 1;
 
     final newText = text.replaceRange(start, end, option);
@@ -240,17 +248,19 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
       selection: newSelection,
     );
 
-    return closeOptions();
+    closeOptions();
   }
 
   void closeOptions() {
     final prevQuery = _currentQuery;
-    final prevTrigger = _currentTrigger;
-    if (prevQuery == null || prevTrigger == null) return;
+    if (prevQuery == null /*|| prevTrigger == null*/) return; // Already closed if no query
 
     _currentQuery = null;
     _currentTrigger = null;
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+    }
+    _focusNode.requestFocus();
   }
 
   void showOptions(
@@ -258,12 +268,19 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
       AutocompleteTrigger trigger,
       ) {
     final prevQuery = _currentQuery;
-    final prevTrigger = _currentTrigger;
-    if (prevQuery == query && prevTrigger == trigger) return;
+
+    bool werePreviouslyHiddenOrDifferent = _currentQuery == null || _currentQuery != query || _currentTrigger != trigger;
 
     _currentQuery = query;
     _currentTrigger = trigger;
-    if (mounted) setState(() {});
+    _hideOptions = false;
+
+    if (mounted) {
+      setState(() {});
+    }
+    if (werePreviouslyHiddenOrDifferent && _shouldShowOptions && !_optionsViewFocusNode.hasFocus) {
+      SemanticsService.announce("Autocomplete suggestions available. Press Arrow Down to navigate.", Directionality.of(context));
+    }
   }
 
   _AutocompleteInvokedTriggerWithQuery? _getInvokedTriggerWithQuery(
@@ -284,28 +301,57 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
   void _onChangedField() {
     if (_debounceTimer?.isActive == true) _debounceTimer?.cancel();
     _debounceTimer = Timer(widget.debounceDuration, () {
+      if (!mounted) return;
       final textEditingValue = _textEditingController.value;
 
-      if (textEditingValue.text == _lastFieldText) return;
+      if (textEditingValue.text == _lastFieldText && _currentQuery != null) return; // No change and options already potentially visible
 
       _hideOptions = false;
       _lastFieldText = textEditingValue.text;
 
-      if (textEditingValue.text.isEmpty) return closeOptions();
+      if (textEditingValue.text.isEmpty) {
+        if (_currentQuery != null) closeOptions(); // Close if options were visible
+        return;
+      }
 
       final triggerWithQuery = _getInvokedTriggerWithQuery(textEditingValue);
 
-      if (triggerWithQuery == null) return closeOptions();
+      if (triggerWithQuery == null) {
+        if (_currentQuery != null) closeOptions(); // Close if options were visible for a previous trigger
+        return;
+      }
 
       final trigger = triggerWithQuery.trigger;
       final query = triggerWithQuery.query;
-      return showOptions(query, trigger);
+      showOptions(query, trigger);
     });
   }
 
   void _onChangedFocus() {
-    _hideOptions = !_focusNode.hasFocus;
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    debugPrint("MultiTriggerAutocompleteState: _onChangedFocus (for _focusNode), _focusNode.hasFocus: ${_focusNode.hasFocus}");
+
+    if (!_focusNode.hasFocus && !_optionsViewFocusNode.hasFocus) {
+      _hideOptions = true;
+      if (_currentQuery != null) {
+        closeOptions();
+      } else if (mounted) {
+        setState(() {});
+      }
+    } else if (_focusNode.hasFocus) {
+      _hideOptions = false;
+      final textEditingValue = _textEditingController.value;
+      if(textEditingValue.text.isNotEmpty) {
+        final triggerWithQuery = _getInvokedTriggerWithQuery(textEditingValue);
+        if (triggerWithQuery != null) {
+          showOptions(triggerWithQuery.query, triggerWithQuery.trigger);
+        } else {
+          if (_currentQuery != null) closeOptions();
+        }
+      } else {
+        if (_currentQuery != null) closeOptions();
+      }
+    }
   }
 
   void _updateTextEditingController(
@@ -319,7 +365,7 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
       _textEditingController = current!;
     } else if (current == null) {
       _textEditingController.removeListener(_onChangedField);
-      _textEditingController = TextEditingController();
+      _textEditingController = TextEditingController.fromValue(_textEditingController.value); // Create new internal from old's value
     } else {
       _textEditingController.removeListener(_onChangedField);
       _textEditingController = current;
@@ -337,33 +383,137 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
       _focusNode = current!;
     } else if (current == null) {
       _focusNode.removeListener(_onChangedFocus);
-      _focusNode = FocusNode();
+      _focusNode = FocusNode(debugLabel: 'AutocompleteTextField-Internal');
     } else {
       _focusNode.removeListener(_onChangedFocus);
       _focusNode = current;
     }
     _focusNode.addListener(_onChangedFocus);
+    _focusNode.addListener(() {
+      if(mounted) {
+        debugPrint("Text field focus node (_focusNode) hasFocus: ${_focusNode.hasFocus}");
+      }
+    });
   }
 
   @override
   void initState() {
     super.initState();
+
+    _fieldNodeFocusListener = () {
+      if (mounted) {
+        debugPrint("Text field focus node (_focusNode) hasFocus: ${_focusNode.hasFocus}");
+      }
+    };
+
     _textEditingController = widget.textEditingController ??
-        TextEditingController.fromValue(widget.initialValue);
+        TextEditingController.fromValue(widget.initialValue ?? TextEditingValue.empty);
     _textEditingController.addListener(_onChangedField);
-    _focusNode = widget.focusNode ?? FocusNode();
+
+    if (widget.focusNode == null) {
+      // Internal FocusNode
+      _focusNode = FocusNode(debugLabel: 'AutocompleteTextField-Internal');
+      _focusNode.onKeyEvent = _handleTextFieldFocusKeyEvent;
+    } else {
+      // External FocusNode
+      _focusNode = widget.focusNode!;
+      _originalExternalFocusNodeOnKeyEvent = _focusNode.onKeyEvent;
+      _focusNode.onKeyEvent = (node, event) {
+        final ourResult = _handleTextFieldFocusKeyEvent(node, event);
+        if (ourResult == KeyEventResult.handled) {
+          return KeyEventResult.handled;
+        }
+        // If our handler ignored it, call the original external handler, if any
+        return _originalExternalFocusNodeOnKeyEvent?.call(node, event) ?? KeyEventResult.ignored;
+      };
+    }
     _focusNode.addListener(_onChangedFocus);
-    _wrapperFocusNode = FocusNode(debugLabel: 'MultiTriggerAutocomplete Wrapper');
+    _focusNode.addListener(_fieldNodeFocusListener);
+
+    _wrapperFocusNode = FocusNode(debugLabel: 'MultiTriggerAutocomplete-Wrapper');
+    _optionsViewFocusNode = FocusNode(debugLabel: 'MultiTriggerAutocomplete-OptionsView');
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _textEditingController.text.isNotEmpty) {
+        final triggerWithQuery = _getInvokedTriggerWithQuery(_textEditingController.value);
+        if (triggerWithQuery != null) {
+          showOptions(triggerWithQuery.query, triggerWithQuery.trigger);
+        }
+      }
+    });
   }
+
+  // In /Users/mlavercombe/.pub-cache/git/multi_trigger_autocomplete-97eac80579d32437450d4ca7a950a76334fbabee/lib/src/multi_trigger_autocomplete.dart
+// Inside the MultiTriggerAutocompleteState class:
 
   @override
   void didUpdateWidget(MultiTriggerAutocomplete oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    // Update TextEditingController
     _updateTextEditingController(
       oldWidget.textEditingController,
       widget.textEditingController,
     );
-    _updateFocusNode(oldWidget.focusNode, widget.focusNode);
+
+    // Update FocusNode and its onKeyEvent handler
+    if (oldWidget.focusNode != widget.focusNode) {
+      // --- Clean up the old _focusNode ---
+      _focusNode.removeListener(_onChangedFocus);
+      _focusNode.removeListener(_fieldNodeFocusListener); // Assuming _fieldNodeFocusListener is still relevant
+
+      if (oldWidget.focusNode == null) {
+        // The old _focusNode was internal
+        _focusNode.onKeyEvent = null; // Clear our handler
+        _focusNode.dispose();         // Dispose it
+      } else {
+        // The old _focusNode was external, restore its original onKeyEvent
+        // This assumes _focusNode at this point refers to oldWidget.focusNode
+        oldWidget.focusNode!.onKeyEvent = _originalExternalFocusNodeOnKeyEvent;
+      }
+
+      // --- Set up the new _focusNode ---
+      if (widget.focusNode == null) {
+        // New _focusNode is internal
+        _focusNode = FocusNode(debugLabel: 'AutocompleteTextField-Internal-Updated');
+        _focusNode.onKeyEvent = _handleTextFieldFocusKeyEvent;
+        _originalExternalFocusNodeOnKeyEvent = null; // No original for internal nodes
+      } else {
+        // New _focusNode is external
+        _focusNode = widget.focusNode!;
+        _originalExternalFocusNodeOnKeyEvent = _focusNode.onKeyEvent; // Store new original
+        _focusNode.onKeyEvent = (node, event) {
+          final ourResult = _handleTextFieldFocusKeyEvent(node, event);
+          if (ourResult == KeyEventResult.handled) {
+            return KeyEventResult.handled;
+          }
+          // If our handler ignored it, call the original external handler, if any
+          return _originalExternalFocusNodeOnKeyEvent?.call(node, event) ?? KeyEventResult.ignored;
+        };
+      }
+      _focusNode.addListener(_onChangedFocus);
+      _focusNode.addListener(_fieldNodeFocusListener); // Assuming _fieldNodeFocusListener is still relevant
+    }
+
+    // Handle initialValue changes when textEditingController is not externally provided
+    if (widget.initialValue != oldWidget.initialValue && widget.textEditingController == null) {
+      _textEditingController.value = widget.initialValue ?? TextEditingValue.empty;
+
+      // This logic seems to re-evaluate options based on the new initialValue.
+      // It might be correct, or might need adjustment depending on desired behavior.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _textEditingController.text.isNotEmpty) {
+          final triggerWithQuery = _getInvokedTriggerWithQuery(_textEditingController.value);
+          if (triggerWithQuery != null) {
+            showOptions(triggerWithQuery.query, triggerWithQuery.trigger);
+          } else {
+            if (_currentQuery != null) closeOptions();
+          }
+        } else if (mounted && _textEditingController.text.isEmpty && _currentQuery != null) {
+          closeOptions();
+        }
+      });
+    }
   }
 
   @override
@@ -373,70 +523,109 @@ class MultiTriggerAutocompleteState extends State<MultiTriggerAutocomplete> {
       _textEditingController.dispose();
     }
     _focusNode.removeListener(_onChangedFocus);
+    _focusNode.removeListener(_fieldNodeFocusListener);
     if (widget.focusNode == null) {
+      _focusNode.onKeyEvent = null;
       _focusNode.dispose();
+    } else {
+      _focusNode.onKeyEvent = _originalExternalFocusNodeOnKeyEvent;
     }
+    _debounceTimer?.cancel();_wrapperFocusNode.dispose();
     _optionsViewFocusNode.dispose();
-    _wrapperFocusNode.dispose();
-    _debounceTimer?.cancel();
-    _currentTrigger = null;
-    _currentQuery = null;
     super.dispose();
+  }
+
+  KeyEventResult _handleWrapperFocusKeyEvents(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    if (_shouldShowOptions) {
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        debugPrint("MultiTriggerAutocompleteState: Escape detected on _wrapperFocusNode. Closing options.");
+        closeOptions();
+        SemanticsService.announce("Autocomplete suggestions hidden.", Directionality.of(context));
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        debugPrint("MultiTriggerAutocompleteState: ArrowDown on _wrapperFocusNode. Trying to move to options...");
+        if (_focusNode.hasFocus) {
+          _focusNode.unfocus(disposition: UnfocusDisposition.scope);
+        }
+        _optionsViewFocusNode.requestFocus();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    } else {
+      debugPrint("MultiTriggerAutocompleteState: Key event on _wrapperFocusNode while _shouldShowOptions is false. ""_focusNode.hasFocus: ${_focusNode.hasFocus}. Event: ${event.logicalKey}. ""This wrapper is ignoring the event to allow default child handling.");
+      return KeyEventResult.ignored;
+    }
+  }
+
+  KeyEventResult _handleTextFieldFocusKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.space) {
+      if (!node.hasPrimaryFocus) {
+        // The TextFormField's FocusNode (node, which is _focusNode) is active
+        // but NOT the primary focused widget in the application.
+        // This implies another widget (e.g., a toolbar button in fieldViewBuilder) has primary focus.
+        // By returning "handled", we prevent the TextFormField from processing this Enter/Space
+        // for text input, allowing the event to be received by the widget that *does* have primary focus.
+        debugPrint("MTAState._handleTextFieldFocusKeyEvent: Enter/Space on non-primary _focusNode ('${node.debugLabel}'). HANDLED (to prevent text field processing).");
+        return KeyEventResult.handled;
+      }
+    }
+    // If _focusNode has primary focus, or it's any other key,
+    // let the TextFormField process it normally by "ignoring" the event at this FocusNode level.
+    debugPrint("MTAState._handleTextFieldFocusKeyEvent: Other key or _focusNode ('${node.debugLabel}') is primary. IGNORING (letting TextField process).");
+    return KeyEventResult.ignored;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Builder(
-      builder: (context) {
-        final anchor = widget.optionsAlignment._toAnchor(
-          widthFactor: widget.optionsWidthFactor,
-        );
-        final shouldShowOptions = _shouldShowOptions;
+    final bool shouldActuallyShowOptionsInPortal = _shouldShowOptions;
 
-        Widget? portalFollower;
-        if (shouldShowOptions && _currentTrigger != null && _currentQuery != null) {
-          portalFollower = TextFieldTapRegion(
-            child: _currentTrigger!.optionsViewBuilder(
-              context,
-              _currentQuery!,
-              _textEditingController,
-              _optionsViewFocusNode, 
-            ),
-          );
+    return PopScope(
+      canPop: !shouldActuallyShowOptionsInPortal,
+        onPopInvoked: (bool didPop) {
+        if (didPop) {
+          return;
         }
-
-        return PortalTarget(
-          anchor: anchor,
-          visible: shouldShowOptions,
-          portalFollower: portalFollower,
-          child: Focus(
-            focusNode: _wrapperFocusNode, 
-            onKeyEvent: (FocusNode node, KeyEvent event) { 
-              if (event is KeyDownEvent) { 
-                if (event.logicalKey == LogicalKeyboardKey.escape) {
-                  if (_shouldShowOptions) {
-                    closeOptions();
-                    SemanticsService.announce("Autocomplete suggestions hidden", Directionality.of(context));
-                    return KeyEventResult.handled; 
-                  }
-                } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                  if (_shouldShowOptions && !_optionsViewFocusNode.hasFocus) {
-                    _optionsViewFocusNode.requestFocus();
-                    SemanticsService.announce("Showing autocomplete suggestions. Use arrow keys to navigate.", Directionality.of(context));
-                    return KeyEventResult.handled; 
-                  }
-                }
-              }
-              return KeyEventResult.ignored; 
-            },
-            child: widget.fieldViewBuilder(
-              context,
-              _textEditingController,
-              _focusNode,
-            ),
-          ),
-        );
+        if (shouldActuallyShowOptionsInPortal) {
+          debugPrint("PopScope: Pop prevented by autocomplete options. Closing options.");
+          closeOptions();
+        }
       },
+      child:  PortalTarget(
+        anchor: widget.optionsAlignment._toAnchor(
+          widthFactor: widget.optionsWidthFactor,
+        ),
+        visible: shouldActuallyShowOptionsInPortal,
+        portalFollower: shouldActuallyShowOptionsInPortal && _currentTrigger != null && _currentQuery != null
+            ? TextFieldTapRegion(
+          child: _currentTrigger!.optionsViewBuilder(
+            context,
+            _currentQuery!,
+            _textEditingController,
+            _optionsViewFocusNode,
+            this,
+          ),
+        )
+            : null,
+        child: Focus(
+          focusNode: _wrapperFocusNode,
+          onKeyEvent: _handleWrapperFocusKeyEvents,
+          child: widget.fieldViewBuilder(
+            context,
+            _textEditingController,
+            _focusNode,
+          ),
+        ),
+      )
     );
   }
 }
@@ -450,9 +639,10 @@ class _AutocompleteInvokedTriggerWithQuery {
 
 class _MultiTriggerAutocompleteField extends StatelessWidget {
   const _MultiTriggerAutocompleteField({
+    Key? key,
     required this.focusNode,
     required this.textEditingController,
-  });
+  }) : super(key: key);
 
   final FocusNode focusNode;
 
